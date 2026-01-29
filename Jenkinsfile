@@ -1,8 +1,8 @@
-pipeline {
+ pipeline {
     agent any
 
     environment {
-        // Point to Jenkins user’s kube config
+        // Point Jenkins to its kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -19,16 +19,32 @@ pipeline {
             }
         }
 
+        stage('Verify Workspace') {
+            steps {
+                echo "Listing files in workspace..."
+                sh 'ls -la'
+            }
+        }
+
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    echo "Building Docker image directly in Minikube..."
+                    echo "Building Docker image inside Minikube..."
+
+                    // Get short Git commit hash for unique image tag
+                    IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
+                    echo "Using image: ${IMAGE_NAME}"
+
                     sh '''
                         # Ensure Minikube is running
-                        minikube status || minikube start
-                        
-                        # Build image inside Minikube without TLS issues
-                        minikube -p minikube image build -t python-cicd:latest .
+                        minikube status || minikube start --driver=docker
+
+                        # Use Minikube Docker environment
+                        eval $(minikube -p minikube docker-env)
+
+                        # Build Docker image
+                        docker build -t ${IMAGE_NAME} .
                     '''
                 }
             }
@@ -38,9 +54,18 @@ pipeline {
             steps {
                 script {
                     echo "Deploying to Kubernetes..."
+
                     sh '''
-                        kubectl apply -f k8s/deployment.yaml
-                        kubectl set image deployment/python-cicd python-cicd=python-cicd:latest
+                        # Apply Kubernetes manifest
+                        if [ -f deployment.yaml ]; then
+                            kubectl apply -f deployment.yaml
+                        else
+                            echo "❌ deployment.yaml not found!"
+                            exit 1
+                        fi
+
+                        # Update image in deployment
+                        kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
                     '''
                 }
             }
@@ -49,7 +74,7 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "Checking rollout status..."
+                    echo "Checking deployment rollout..."
                     sh 'kubectl rollout status deployment/python-cicd'
                     sh 'kubectl get pods -o wide'
                 }
@@ -66,3 +91,4 @@ pipeline {
         }
     }
 }
+
