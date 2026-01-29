@@ -39,7 +39,7 @@ pipeline {
                 script {
                     echo "Deploying to Kubernetes..."
                     sh '''
-                        kubectl apply -f deployment.yaml
+                        kubectl apply -f k8s/deployment.yaml
                         kubectl set image deployment/python-cicd python-cicd=python-cicd:latest
                     '''
                 }
