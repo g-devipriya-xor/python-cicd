@@ -2,13 +2,11 @@ pipeline {
     agent any
 
     environment {
-        // Unique image tag using Git commit
-        IMAGE_TAG = ""
         IMAGE_NAME = ""
+        IMAGE_TAG = ""
     }
 
     stages {
-
         stage('Checkout SCM') {
             steps {
                 checkout([$class: 'GitSCM',
@@ -21,19 +19,14 @@ pipeline {
             }
         }
 
-        stage('Verify Workspace') {
-            steps {
-                echo "Listing files in workspace..."
-                sh 'ls -la'
-            }
-        }
-
-        stage('Build Docker Image') {
+        stage('Build Docker Image Locally') {
             steps {
                 script {
+                    echo "Building Docker image locally..."
+                    // Get short git commit hash for tag
                     IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                    echo "Building Docker image: ${IMAGE_NAME}"
+                    echo "Image name: ${IMAGE_NAME}"
 
                     sh """
                         docker build -t ${IMAGE_NAME} .
@@ -45,7 +38,7 @@ pipeline {
         stage('Load Image into Minikube') {
             steps {
                 script {
-                    echo "Loading Docker image into Minikube..."
+                    echo "Loading image into Minikube..."
                     sh """
                         minikube image load ${IMAGE_NAME}
                     """
@@ -55,18 +48,24 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBE_SECRET')]) {
                     script {
                         echo "Deploying to Minikube using kubeconfig secret..."
-                        
                         sh """
-                            export KUBECONFIG=${KUBECONFIG}
+                            # Create temporary folder and unzip kubeconfig files
+                            TMP_DIR=\$(mktemp -d)
+                            unzip -o \$KUBE_SECRET -d \$TMP_DIR
 
-                            # Apply Kubernetes manifests
+                            export KUBECONFIG=\$TMP_DIR/minikube-config.yaml
+
+                            # Apply deployment
                             kubectl apply -f k8s/deployment.yaml
 
-                            # Update image in deployment
+                            # Update deployment image
                             kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
+
+                            # Clean up
+                            rm -rf \$TMP_DIR
                         """
                     }
                 }
@@ -75,10 +74,9 @@ pipeline {
 
         stage('Verify Deployment') {
             steps {
-                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                script {
+                    echo "Checking rollout status..."
                     sh """
-                        export KUBECONFIG=${KUBECONFIG}
-                        echo "Checking deployment rollout..."
                         kubectl rollout status deployment/python-cicd
                         kubectl get pods -o wide
                     """
@@ -88,14 +86,11 @@ pipeline {
     }
 
     post {
-        always {
-            echo "Pipeline finished"
-        }
         success {
-            echo "✅ Deployment successful!"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check logs above."
+            echo "❌ Pipeline failed. Check the logs above."
         }
     }
 }
