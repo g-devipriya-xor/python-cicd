@@ -1,8 +1,7 @@
- pipeline {
+pipeline {
     agent any
 
     environment {
-        // Point Jenkins to its kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -29,23 +28,18 @@
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    echo "Building Docker image inside Minikube..."
-
                     // Get short Git commit hash for unique image tag
-                    IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
+                    def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Using image: ${IMAGE_NAME}"
 
-                    sh '''
-                        # Ensure Minikube is running
-                        minikube status || minikube start --driver=docker
+                    sh """
+                        # Point Docker to existing Minikube Docker daemon
+                        eval \$(minikube -p minikube docker-env)
 
-                        # Use Minikube Docker environment
-                        eval $(minikube -p minikube docker-env)
-
-                        # Build Docker image
+                        # Build Docker image in Minikube
                         docker build -t ${IMAGE_NAME} .
-                    '''
+                    """
                 }
             }
         }
@@ -54,9 +48,8 @@
             steps {
                 script {
                     echo "Deploying to Kubernetes..."
-
-                    sh '''
-                        # Apply Kubernetes manifest
+                    sh """
+                        # Check if manifest exists
                         if [ -f deployment.yaml ]; then
                             kubectl apply -f deployment.yaml
                         else
@@ -64,9 +57,9 @@
                             exit 1
                         fi
 
-                        # Update image in deployment
+                        # Update deployment with the newly built image
                         kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
-                    '''
+                    """
                 }
             }
         }
@@ -91,4 +84,3 @@
         }
     }
 }
-
