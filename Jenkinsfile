@@ -2,7 +2,6 @@ pipeline {
     agent any
 
     environment {
-        // Jenkins kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -29,17 +28,16 @@ pipeline {
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    // Get Git short hash for image tag
+                    // Get short Git commit hash for unique image tag
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Building image: ${IMAGE_NAME}"
 
                     sh """
-                        # Reset previous Docker environment variables
+                        # Step 3 fix: connect to Minikube Docker daemon without TLS
                         eval \$(minikube -p minikube docker-env --unset)
-
-                        # Point Docker CLI to Minikube Docker daemon
-                        eval \$(minikube -p minikube docker-env)
+                        export DOCKER_HOST=tcp://$(minikube ip):2375
+                        export DOCKER_TLS_VERIFY=""
 
                         # Build Docker image
                         docker build -t ${IMAGE_NAME} .
@@ -56,7 +54,6 @@ pipeline {
 
                     echo "Deploying image: ${IMAGE_NAME} to Kubernetes..."
                     sh """
-                        # Check if deployment.yaml exists
                         if [ -f deployment.yaml ]; then
                             kubectl apply -f deployment.yaml
                         else
@@ -64,7 +61,6 @@ pipeline {
                             exit 1
                         fi
 
-                        # Update deployment image
                         kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
                     """
                 }
