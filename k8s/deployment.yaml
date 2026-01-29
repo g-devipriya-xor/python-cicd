@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: python-cicd
-          image: python-cicd:latest
+          image: python-cicd:placeholder
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
