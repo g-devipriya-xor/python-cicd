@@ -23,6 +23,7 @@ pipeline {
             steps {
                 echo "Listing files in workspace..."
                 sh 'ls -la'
+                sh 'ls -la k8s'
             }
         }
 
@@ -60,8 +61,8 @@ pipeline {
 
                         export KUBECONFIG=\$TMP_DIR/minikube-config.yaml
 
-                        # Apply deployment using full workspace path
-                        kubectl apply -f ${WORKSPACE}/k8s/deployment.yaml
+                        # Apply deployment (relative path to workspace root)
+                        kubectl apply -f k8s/deployment.yaml
 
                         # Update deployment image
                         kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME} -n default
