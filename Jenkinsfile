@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        // Jenkins' kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -28,16 +29,19 @@ pipeline {
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    // Get short Git commit hash for unique image tag
+                    // Create a unique image tag from Git commit
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                    echo "Using image: ${IMAGE_NAME}"
+                    echo "Building image: ${IMAGE_NAME}"
 
                     sh """
                         # Point Docker to existing Minikube Docker daemon
                         eval \$(minikube -p minikube docker-env)
 
-                        # Build Docker image in Minikube
+                        # Disable TLS verification to avoid x509 certificate errors
+                        export DOCKER_TLS_VERIFY=""
+
+                        # Build the Docker image
                         docker build -t ${IMAGE_NAME} .
                     """
                 }
@@ -47,9 +51,13 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo "Deploying to Kubernetes..."
+                    // Use the same image in Kubernetes deployment
+                    def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
+                    
+                    echo "Deploying image: ${IMAGE_NAME} to Kubernetes..."
                     sh """
-                        # Check if manifest exists
+                        # Check if deployment.yaml exists
                         if [ -f deployment.yaml ]; then
                             kubectl apply -f deployment.yaml
                         else
@@ -67,7 +75,7 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "Checking deployment rollout..."
+                    echo "Checking rollout status..."
                     sh 'kubectl rollout status deployment/python-cicd'
                     sh 'kubectl get pods -o wide'
                 }
@@ -80,7 +88,7 @@ pipeline {
             echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check the logs above."
+            echo "❌ Pipeline failed. Check logs above."
         }
     }
 }
