@@ -2,28 +2,33 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = "python-cicd:latest"
-        K8S_DEPLOYMENT_NAME = "python-cicd"
-        K8S_NAMESPACE = "default"
+        // Point to Jenkins user’s kube config
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
     stages {
-
         stage('Checkout SCM') {
             steps {
-                checkout scm
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/g-devipriya-xor/python-cicd',
+                        credentialsId: 'c1e07a47-7c93-460f-ae7b-0514f937d43b'
+                    ]]
+                ])
             }
         }
 
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    echo "Configuring Docker to use Minikube daemon..."
+                    echo "Building Docker image directly in Minikube..."
                     sh '''
-                        # Point Docker to Minikube's Docker daemon
-                        eval $(minikube -p minikube docker-env)
-                        # Build the image inside Minikube
-                        docker build -t $IMAGE_NAME .
+                        # Ensure Minikube is running
+                        minikube status || minikube start
+                        
+                        # Build image inside Minikube without TLS issues
+                        minikube -p minikube image build -t python-cicd:latest .
                     '''
                 }
             }
@@ -32,14 +37,10 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    echo "Applying Kubernetes deployment..."
+                    echo "Deploying to Kubernetes..."
                     sh '''
-                        # Apply deployment.yaml
-                        kubectl apply -f deployment.yaml -n $K8S_NAMESPACE
-
-                        # Force the deployment to use the newly built image
-                        kubectl set image deployment/$K8S_DEPLOYMENT_NAME \
-                        $K8S_DEPLOYMENT_NAME=$IMAGE_NAME -n $K8S_NAMESPACE
+                        kubectl apply -f deployment.yaml
+                        kubectl set image deployment/python-cicd python-cicd=python-cicd:latest
                     '''
                 }
             }
@@ -48,10 +49,9 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    sh '''
-                        echo "Checking pods in Kubernetes..."
-                        kubectl get pods -n $K8S_NAMESPACE
-                    '''
+                    echo "Checking rollout status..."
+                    sh 'kubectl rollout status deployment/python-cicd'
+                    sh 'kubectl get pods -o wide'
                 }
             }
         }
@@ -59,10 +59,10 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully! ✅"
+            echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "Pipeline failed. Check logs for details. ❌"
+            echo "❌ Pipeline failed. Check the logs above."
         }
     }
 }
