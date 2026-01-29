@@ -2,11 +2,12 @@ pipeline {
     agent any
 
     environment {
-        // Jenkins secret will provide kubeconfig
+        // Kubernetes config from Jenkins secret
         KUBECONFIG = ''
     }
 
     stages {
+
         stage('Checkout SCM') {
             steps {
                 checkout([$class: 'GitSCM',
@@ -21,7 +22,7 @@ pipeline {
 
         stage('Verify Workspace') {
             steps {
-                echo "Listing files in workspace..."
+                echo "Listing workspace files..."
                 sh 'ls -la'
             }
         }
@@ -29,19 +30,23 @@ pipeline {
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    def imageTag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    def imageName = "python-cicd:${imageTag}"
-                    echo "Building Docker image: ${imageName}"
+                    def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
+                    echo "Building Docker image: ${IMAGE_NAME}"
 
-                    // Use Jenkins secret file for kubeconfig
+                    // Use kubeconfig secret only for kubectl
                     withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
                         sh """
-                            wsl -d Ubuntu -e bash -c '
-                            export KUBECONFIG=${KUBECONFIG}
-                            minikube status || minikube start
-                            eval \$(minikube -p minikube docker-env)
-                            docker build -t ${imageName} .
-                            '
+                            # Unset any previous Docker TLS envs
+                            eval \$(minikube -p minikube docker-env --unset)
+
+                            # Get Minikube IP and use TCP without TLS
+                            MINIKUBE_IP=\$(minikube ip)
+                            export DOCKER_HOST="tcp://\$MINIKUBE_IP:2375"
+                            export DOCKER_TLS_VERIFY=""
+
+                            # Build the Docker image
+                            docker build -t ${IMAGE_NAME} .
                         """
                     }
                 }
@@ -51,19 +56,21 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    def imageTag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                    def imageName = "python-cicd:${imageTag}"
+                    def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
 
                     withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
                         sh """
-                            export KUBECONFIG=${KUBECONFIG}
+                            # Apply deployment manifest
                             if [ -f k8s/deployment.yaml ]; then
                                 kubectl apply -f k8s/deployment.yaml
-                                kubectl set image deployment/python-cicd python-cicd=${imageName}
                             else
-                                echo "❌ deployment.yaml not found!"
+                                echo "❌ k8s/deployment.yaml not found!"
                                 exit 1
                             fi
+
+                            # Update image in deployment
+                            kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
                         """
                     }
                 }
@@ -72,14 +79,12 @@ pipeline {
 
         stage('Verify Deployment') {
             steps {
-                script {
-                    withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
-                        sh """
-                            export KUBECONFIG=${KUBECONFIG}
-                            kubectl rollout status deployment/python-cicd
-                            kubectl get pods -o wide
-                        """
-                    }
+                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                    sh """
+                        echo "Checking rollout status..."
+                        kubectl rollout status deployment/python-cicd
+                        kubectl get pods -o wide
+                    """
                 }
             }
         }
