@@ -2,15 +2,15 @@ pipeline {
     agent any
 
     environment {
-        // Use the Kubernetes Secret File credential with your minikube-config.yaml
-        KUBECONFIG = credentials('minikube-config')
+        // Unique image tag using Git commit
+        IMAGE_TAG = ""
+        IMAGE_NAME = ""
     }
 
     stages {
 
         stage('Checkout SCM') {
             steps {
-                echo "Checking out Git repository..."
                 checkout([$class: 'GitSCM',
                     branches: [[name: '*/main']],
                     userRemoteConfigs: [[
@@ -21,10 +21,16 @@ pipeline {
             }
         }
 
+        stage('Verify Workspace') {
+            steps {
+                echo "Listing files in workspace..."
+                sh 'ls -la'
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Get short Git commit hash for unique image tag
                     IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Building Docker image: ${IMAGE_NAME}"
@@ -49,34 +55,47 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                script {
-                    echo "Deploying to Minikube..."
+                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                    script {
+                        echo "Deploying to Minikube using kubeconfig secret..."
+                        
+                        sh """
+                            export KUBECONFIG=${KUBECONFIG}
 
-                    sh """
-                        kubectl apply -f k8s/deployment.yaml
-                        kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
-                    """
+                            # Apply Kubernetes manifests
+                            kubectl apply -f k8s/deployment.yaml
+
+                            # Update image in deployment
+                            kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
+                        """
+                    }
                 }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                script {
-                    echo "Checking rollout status..."
-                    sh 'kubectl rollout status deployment/python-cicd'
-                    sh 'kubectl get pods -o wide'
+                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                    sh """
+                        export KUBECONFIG=${KUBECONFIG}
+                        echo "Checking deployment rollout..."
+                        kubectl rollout status deployment/python-cicd
+                        kubectl get pods -o wide
+                    """
                 }
             }
         }
     }
 
     post {
+        always {
+            echo "Pipeline finished"
+        }
         success {
-            echo "✅ Pipeline completed successfully!"
+            echo "✅ Deployment successful!"
         }
         failure {
-            echo "❌ Pipeline failed. Check the logs above."
+            echo "❌ Pipeline failed. Check logs above."
         }
     }
 }
