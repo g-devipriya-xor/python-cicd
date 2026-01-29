@@ -1,6 +1,11 @@
 pipeline {
     agent any
 
+    environment {
+        // Jenkins secret will provide kubeconfig
+        KUBECONFIG = ''
+    }
+
     stages {
         stage('Checkout SCM') {
             steps {
@@ -14,29 +19,51 @@ pipeline {
             }
         }
 
-        stage('Build & Deploy Docker Image in Minikube') {
+        stage('Verify Workspace') {
+            steps {
+                echo "Listing files in workspace..."
+                sh 'ls -la'
+            }
+        }
+
+        stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    // Use the Secret File for kubeconfig
+                    def imageTag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def imageName = "python-cicd:${imageTag}"
+                    echo "Building Docker image: ${imageName}"
+
+                    // Use Jenkins secret file for kubeconfig
                     withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
-                        echo "Using kubeconfig from Jenkins secret: ${KUBECONFIG}"
-
-                        // Get short Git commit hash for unique image tag
-                        IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                        IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                        echo "Building Docker image: ${IMAGE_NAME}"
-
-                        // Build Docker image inside Minikube
                         sh """
-                            # Point to Minikube's Docker daemon
-                            eval \$(minikube -p minikube docker-env --shell bash)
-                            
-                            # Build Docker image
-                            docker build -t ${IMAGE_NAME} .
-                            
-                            # Deploy to Kubernetes
-                            kubectl apply -f k8s/deployment.yaml
-                            kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
+                            wsl -d Ubuntu -e bash -c '
+                            export KUBECONFIG=${KUBECONFIG}
+                            minikube status || minikube start
+                            eval \$(minikube -p minikube docker-env)
+                            docker build -t ${imageName} .
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    def imageTag = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def imageName = "python-cicd:${imageTag}"
+
+                    withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                        sh """
+                            export KUBECONFIG=${KUBECONFIG}
+                            if [ -f k8s/deployment.yaml ]; then
+                                kubectl apply -f k8s/deployment.yaml
+                                kubectl set image deployment/python-cicd python-cicd=${imageName}
+                            else
+                                echo "❌ deployment.yaml not found!"
+                                exit 1
+                            fi
                         """
                     }
                 }
@@ -46,9 +73,13 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 script {
-                    echo "Checking deployment rollout..."
-                    sh 'kubectl rollout status deployment/python-cicd'
-                    sh 'kubectl get pods -o wide'
+                    withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBECONFIG')]) {
+                        sh """
+                            export KUBECONFIG=${KUBECONFIG}
+                            kubectl rollout status deployment/python-cicd
+                            kubectl get pods -o wide
+                        """
+                    }
                 }
             }
         }
