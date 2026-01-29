@@ -11,6 +11,7 @@ pipeline {
             steps {
                 checkout([$class: 'GitSCM',
                     branches: [[name: '*/main']],
+                    extensions: [[$class: 'CleanBeforeCheckout']], // ensures workspace is clean
                     userRemoteConfigs: [[
                         url: 'https://github.com/g-devipriya-xor/python-cicd',
                         credentialsId: 'c1e07a47-7c93-460f-ae7b-0514f937d43b'
@@ -21,8 +22,9 @@ pipeline {
 
         stage('Verify Workspace') {
             steps {
-                echo "Listing files in workspace..."
+                echo "Listing workspace root..."
                 sh 'ls -la'
+                echo "Listing k8s folder..."
                 sh 'ls -la k8s'
             }
         }
@@ -30,7 +32,6 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 script {
-                    // Get short Git commit hash for unique image tag
                     IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Building Docker image: ${IMAGE_NAME}"
@@ -44,10 +45,10 @@ pipeline {
 
         stage('Load Image into Minikube') {
             steps {
-                echo "Loading Docker image into Minikube..."
-                sh """
-                    minikube image load ${IMAGE_NAME}
-                """
+                script {
+                    echo "Loading Docker image into Minikube..."
+                    sh "minikube image load ${IMAGE_NAME}"
+                }
             }
         }
 
@@ -55,21 +56,23 @@ pipeline {
             steps {
                 echo "Deploying to Minikube using kubeconfig secret..."
                 withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBE_SECRET')]) {
-                    sh """
-                        TMP_DIR=\$(mktemp -d)
-                        unzip -o \$KUBE_SECRET -d \$TMP_DIR
+                    script {
+                        sh """
+                            TMP_DIR=\$(mktemp -d)
+                            unzip -o \$KUBE_SECRET -d \$TMP_DIR
 
-                        export KUBECONFIG=\$TMP_DIR/minikube-config.yaml
+                            export KUBECONFIG=\$TMP_DIR/kubeconfigs/minikube-config.yaml
 
-                        # Apply deployment (relative path to workspace root)
-                        kubectl apply -f k8s/deployment.yaml
+                            # Apply deployment
+                            kubectl apply -f k8s/deployment.yaml
 
-                        # Update deployment image
-                        kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME} -n default
+                            # Update deployment image
+                            kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME} -n default
 
-                        # Wait for rollout
-                        kubectl rollout status deployment/python-cicd -n default
-                    """
+                            # Wait for rollout to finish
+                            kubectl rollout status deployment/python-cicd -n default
+                        """
+                    }
                 }
             }
         }
@@ -77,10 +80,16 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 echo "Verifying deployment..."
-                sh """
-                    kubectl get pods -o wide
-                    kubectl get svc -o wide
-                """
+                withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBE_SECRET')]) {
+                    sh """
+                        TMP_DIR=\$(mktemp -d)
+                        unzip -o \$KUBE_SECRET -d \$TMP_DIR
+                        export KUBECONFIG=\$TMP_DIR/kubeconfigs/minikube-config.yaml
+
+                        kubectl get pods -o wide
+                        kubectl get svc -o wide
+                    """
+                }
             }
         }
     }
