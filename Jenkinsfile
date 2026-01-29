@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        // Jenkins kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -31,17 +32,20 @@ pipeline {
                     // Get short Git commit hash for unique image tag
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                    echo "Building image: ${IMAGE_NAME}"
+                    echo "Building Docker image: ${IMAGE_NAME}"
 
-                    sh """
+                    // Use single-quoted shell string to prevent Groovy $ interpolation
+                    sh '''
                         # Step 3 fix: connect to Minikube Docker daemon without TLS
-                        eval \$(minikube -p minikube docker-env --unset)
+                        eval $(minikube -p minikube docker-env --unset)
+
+                        # Connect to Minikube Docker daemon without TLS
                         export DOCKER_HOST=tcp://$(minikube ip):2375
                         export DOCKER_TLS_VERIFY=""
 
                         # Build Docker image
-                        docker build -t ${IMAGE_NAME} .
-                    """
+                        docker build -t '${IMAGE_NAME}' .
+                    '''
                 }
             }
         }
@@ -52,8 +56,9 @@ pipeline {
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
 
-                    echo "Deploying image: ${IMAGE_NAME} to Kubernetes..."
-                    sh """
+                    echo "Deploying Docker image ${IMAGE_NAME} to Kubernetes..."
+                    sh '''
+                        # Ensure deployment.yaml exists
                         if [ -f deployment.yaml ]; then
                             kubectl apply -f deployment.yaml
                         else
@@ -61,8 +66,9 @@ pipeline {
                             exit 1
                         fi
 
-                        kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
-                    """
+                        # Update deployment image
+                        kubectl set image deployment/python-cicd python-cicd='${IMAGE_NAME}'
+                    '''
                 }
             }
         }
