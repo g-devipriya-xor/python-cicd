@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        // Jenkins' kube config
+        // Jenkins kube config
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
     }
 
@@ -29,19 +29,19 @@ pipeline {
         stage('Build Docker Image in Minikube') {
             steps {
                 script {
-                    // Create a unique image tag from Git commit
+                    // Get Git short hash for image tag
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Building image: ${IMAGE_NAME}"
 
                     sh """
-                        # Point Docker to existing Minikube Docker daemon
+                        # Reset previous Docker environment variables
+                        eval \$(minikube -p minikube docker-env --unset)
+
+                        # Point Docker CLI to Minikube Docker daemon
                         eval \$(minikube -p minikube docker-env)
 
-                        # Disable TLS verification to avoid x509 certificate errors
-                        export DOCKER_TLS_VERIFY=""
-
-                        # Build the Docker image
+                        # Build Docker image
                         docker build -t ${IMAGE_NAME} .
                     """
                 }
@@ -51,10 +51,9 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
-                    // Use the same image in Kubernetes deployment
                     def IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     def IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                    
+
                     echo "Deploying image: ${IMAGE_NAME} to Kubernetes..."
                     sh """
                         # Check if deployment.yaml exists
@@ -65,7 +64,7 @@ pipeline {
                             exit 1
                         fi
 
-                        # Update deployment with the newly built image
+                        # Update deployment image
                         kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
                     """
                 }
@@ -88,7 +87,7 @@ pipeline {
             echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check logs above."
+            echo "❌ Pipeline failed. Check the logs above."
         }
     }
 }
