@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-cicd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: python-cicd
+  template:
+    metadata:
+      labels:
+        app: python-cicd
+    spec:
+      containers:
+        - name: python-cicd
+          image: python-cicd:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5000
