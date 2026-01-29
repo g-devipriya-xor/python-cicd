@@ -35,10 +35,7 @@ pipeline {
                     IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
                     echo "Building Docker image: ${IMAGE_NAME}"
-
-                    sh """
-                        docker build -t ${IMAGE_NAME} .
-                    """
+                    sh "docker build -t ${IMAGE_NAME} ."
                 }
             }
         }
@@ -60,13 +57,12 @@ pipeline {
                         sh """
                             TMP_DIR=\$(mktemp -d)
                             unzip -o \$KUBE_SECRET -d \$TMP_DIR
-
                             export KUBECONFIG=\$TMP_DIR/kubeconfigs/minikube-config.yaml
 
-                            # Apply deployment
+                            # Apply deployment (initial create)
                             kubectl apply -f k8s/deployment.yaml
 
-                            # Update deployment image
+                            # Update deployment to use dynamically tagged image
                             kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME} -n default
 
                             # Wait for rollout to finish
