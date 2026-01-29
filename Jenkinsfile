@@ -19,14 +19,20 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image Locally') {
+        stage('Verify Workspace') {
+            steps {
+                echo "Listing files in workspace..."
+                sh 'ls -la'
+            }
+        }
+
+        stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Building Docker image locally..."
-                    // Get short git commit hash for tag
+                    // Get short Git commit hash for unique image tag
                     IMAGE_TAG = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                     IMAGE_NAME = "python-cicd:${IMAGE_TAG}"
-                    echo "Image name: ${IMAGE_NAME}"
+                    echo "Building Docker image: ${IMAGE_NAME}"
 
                     sh """
                         docker build -t ${IMAGE_NAME} .
@@ -37,50 +43,43 @@ pipeline {
 
         stage('Load Image into Minikube') {
             steps {
-                script {
-                    echo "Loading image into Minikube..."
-                    sh """
-                        minikube image load ${IMAGE_NAME}
-                    """
-                }
+                echo "Loading Docker image into Minikube..."
+                sh """
+                    minikube image load ${IMAGE_NAME}
+                """
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
+                echo "Deploying to Minikube using kubeconfig secret..."
                 withCredentials([file(credentialsId: 'minikube-config', variable: 'KUBE_SECRET')]) {
-                    script {
-                        echo "Deploying to Minikube using kubeconfig secret..."
-                        sh """
-                            # Create temporary folder and unzip kubeconfig files
-                            TMP_DIR=\$(mktemp -d)
-                            unzip -o \$KUBE_SECRET -d \$TMP_DIR
+                    sh """
+                        TMP_DIR=\$(mktemp -d)
+                        unzip -o \$KUBE_SECRET -d \$TMP_DIR
 
-                            export KUBECONFIG=\$TMP_DIR/minikube-config.yaml
+                        export KUBECONFIG=\$TMP_DIR/minikube-config.yaml
 
-                            # Apply deployment
-                            kubectl apply -f k8s/deployment.yaml
+                        # Apply deployment using full workspace path
+                        kubectl apply -f ${WORKSPACE}/k8s/deployment.yaml
 
-                            # Update deployment image
-                            kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME}
+                        # Update deployment image
+                        kubectl set image deployment/python-cicd python-cicd=${IMAGE_NAME} -n default
 
-                            # Clean up
-                            rm -rf \$TMP_DIR
-                        """
-                    }
+                        # Wait for rollout
+                        kubectl rollout status deployment/python-cicd -n default
+                    """
                 }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                script {
-                    echo "Checking rollout status..."
-                    sh """
-                        kubectl rollout status deployment/python-cicd
-                        kubectl get pods -o wide
-                    """
-                }
+                echo "Verifying deployment..."
+                sh """
+                    kubectl get pods -o wide
+                    kubectl get svc -o wide
+                """
             }
         }
     }
@@ -90,7 +89,7 @@ pipeline {
             echo "✅ Pipeline completed successfully!"
         }
         failure {
-            echo "❌ Pipeline failed. Check the logs above."
+            echo "❌ Pipeline failed. Check logs above."
         }
     }
 }
